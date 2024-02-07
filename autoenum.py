@@ -7,7 +7,7 @@ import sys
 
 URL_REGEX = re.compile(r".*https?:\/\/([a-zA-Z0-9\.]+)")
 NMAP_OPEN_PORT_LINE_REGEX = re.compile(r"^\d+/tcp\s+open")
-FFUF_REGEX = re.compile(r".*\[2K(\S+)\s*\[Status: (\d+),")
+FFUF_REGEX = re.compile(r".*\[2K(\S+)\s*\[Status: (\d+), Size: (\d+),")
 IP_REGEX = re.compile(r"\d+\.\d+\.\d+\.\d+")
 AUTOENUM_LOG_FILE = "/autoenum.log"
 
@@ -147,23 +147,22 @@ def build_url(host, port, ssl):
     return url
 
 
-async def subdomain_enum(host, port, ssl, output_dir, proxy, wordlist, verbose) -> []:
+async def subdomain_enum(host, port, ssl, output_dir, wordlist, verbose) -> []:
     found = []
     if IP_REGEX.match(host):
         Logger.info(f"Skipping subdomain enum for IP: {host}", output_dir)
         return found
     Logger.info(f'Subdomain enum: {host}:{port}', output_dir)
     url = build_url(host, port, ssl)
-    cmd = f'ffuf -u {url} -w {wordlist} -H "Host: FUZZ.{host}" -fc 302 -o {output_dir}/ffuf-subdomain-enum-{host}-{port}.log'
-    if proxy:
-        cmd += f" -x {proxy}"
+    cmd = f'ffuf -u {url} -w {wordlist} -H "Host: FUZZ.{host}" -fc 302 -of md -o {output_dir}/ffuf-subdomain-enum-{host}-{port}.md'
     output = run_command(cmd, output_dir, verbose)
     for line in output.split('\n'):
         match = FFUF_REGEX.match(line.strip())
         if match:
             subdomain = match.group(1)
             http_code = match.group(2)
-            Logger.highlight(f"Found subdomain: {subdomain}.{host} ({http_code})", output_dir)
+            size = match.group(3)
+            Logger.highlight(f"Found subdomain: {subdomain}.{host} (Code: {http_code}, Size: {size})", output_dir)
             found.append(f"{subdomain}.{host}")
     return found
 
@@ -171,7 +170,7 @@ async def subdomain_enum(host, port, ssl, output_dir, proxy, wordlist, verbose) 
 async def directory_brute_force(host, port, ssl, output_dir, proxy, wordlist, verbose) -> []:
     url = build_url(host, port, ssl)
     Logger.info(f'Directory brute forcing: {url}', output_dir)
-    cmd = f'ffuf -u {url}/FUZZ -w {wordlist} -o {output_dir}/ffuf-dirb-{host}-{port}.log -fc 302'
+    cmd = f'ffuf -u {url}/FUZZ -w {wordlist} -of md -o {output_dir}/ffuf-dirb-{host}-{port}.md -fc 302'
     if proxy:
         cmd += f" -x {proxy}"
     output = run_command(cmd, output_dir, verbose)
@@ -181,7 +180,8 @@ async def directory_brute_force(host, port, ssl, output_dir, proxy, wordlist, ve
         if match:
             directory = match.group(1)
             http_code = match.group(2)
-            Logger.success(f"Directory brute-forced: {url}/{directory} ({http_code})", output_dir)
+            size = match.group(3)
+            Logger.success(f"Directory brute-forced: {url}/{directory} (Code: {http_code}, Size: {size})", output_dir)
             found.append(directory)
     return found
 
@@ -190,7 +190,7 @@ async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, direc
     Logger.info(f'Web scanning {host}:{port}', output_dir)
     crawl = web_crawl(host, port, ssl, output_dir, proxy, verbose)
     brute_force = directory_brute_force(host, port, ssl, output_dir, proxy, directory_wordlist, verbose)
-    subdomains = await subdomain_enum(host, port, ssl, output_dir, proxy, subdomain_wordlist, verbose)
+    subdomains = await subdomain_enum(host, port, ssl, output_dir, subdomain_wordlist, verbose)
     tasks = []
     for subdomain in subdomains:
         tasks.append(web_scan(subdomain, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, verbose))
