@@ -5,7 +5,7 @@ import subprocess
 import asyncio
 import sys
 
-WEB_PORTS = [80, 443]
+WEB_PORTS = ["80", "443"]
 
 URL_REGEX = re.compile(r".*https?:\/\/([a-zA-Z0-9\.]+)")
 
@@ -114,8 +114,8 @@ async def web_scan(host, output_dir, port, verbose):
     Logger.info(f'Web scanning {host}:{port}')
     crawl = web_crawl(host, port, output_dir, verbose)
     brute_force = directory_brute_force(host, port, output_dir, verbose)
-    subdomain_enum = subdomain_enum(host, port, output_dir, verbose)
-    await asyncio.gather(crawl, brute_force, subdomain_enum)
+    subdomains = subdomain_enum(host, port, output_dir, verbose)
+    await asyncio.gather(crawl, brute_force, subdomains)
 
 
 async def main():
