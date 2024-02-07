@@ -25,6 +25,7 @@ options:
   -v, --verbose         verbose logging
   -p PROXY, --proxy PROXY
                         url to proxy web traffic through
+  -r, --redirects       don't ignore redirects
   -a, --aggressive      aggressive mode, e.g. running feroxbuster
   -sw SUBDOMAIN_WORDLIST, --subdomain-wordlist SUBDOMAIN_WORDLIST
                         wordlist to use for subdomain proxying
