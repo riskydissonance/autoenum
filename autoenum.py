@@ -239,7 +239,7 @@ async def aggressive_content_discovery(host, port, ssl, output_dir, proxy, verbo
         cmd += f" --proxy {proxy} --insecure"
     if verbose:
         Logger.info(f'[Aggressive] Running: {cmd}', output_dir)
-    subprocess.run(cmd, stdout=subprocess.STDOUT, stderr=subprocess.STDOUT, shell=True)
+    subprocess.run(cmd, shell=True)
 
 
 async def main():
