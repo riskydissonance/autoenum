@@ -278,6 +278,8 @@ async def main():
                          args.verbose))
 
     await asyncio.gather(*tasks)
+    Logger.highlight("Done!", output_dir)
+    tasks = []
 
     if args.aggressive:
         Logger.info('[Aggressive] Starting aggressive scans', output_dir)
@@ -288,7 +290,8 @@ async def main():
                 tasks.append(
                     aggressive_content_discovery(host, port, ssl, output_dir, args.proxy, args.verbose))
 
-    Logger.highlight("Done!", output_dir)
+    await asyncio.gather(*tasks)
+    Logger.highlight("Aggressive scans done!", output_dir)
 
 
 if __name__ == '__main__':
