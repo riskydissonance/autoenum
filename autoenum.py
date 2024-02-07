@@ -220,11 +220,13 @@ async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, direc
         return
     crawl = web_crawl(host, port, ssl, output_dir, proxy, verbose)
     brute_force = url_brute_force(host, port, ssl, output_dir, proxy, directory_wordlist, show_redirects, verbose)
-    subdomains = await check_csp(host, port, ssl, output_dir, proxy, show_redirects, verbose)
-    subdomains.extend(await subdomain_enum(host, port, ssl, output_dir, subdomain_wordlist, verbose))
+    subdomains = await check_csp(host, port, ssl, output_dir, proxy, verbose)
+    subdomains.extend(await subdomain_enum(host, port, ssl, output_dir, subdomain_wordlist, show_redirects, verbose))
     tasks = []
     for subdomain in set(subdomains):
-        tasks.append(web_scan(subdomain, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, verbose))
+        tasks.append(
+            web_scan(subdomain, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, show_redirects,
+                     verbose))
     await asyncio.gather(crawl, brute_force)
     await asyncio.gather(*tasks)
 
