@@ -7,6 +7,8 @@ Auto enumeration script used for CTFs.
 - [nmap](https://nmap.org/)
 - [katana](https://github.com/projectdiscovery/katana)
 - [ffuf](https://github.com/ffuf/ffuf)
+- [feroxbuster](https://github.com/epi052/feroxbuster)
+- [csprecon](https://github.com/edoardottt/csprecon)
 
 ## Usage
 ```
@@ -23,6 +25,7 @@ options:
   -v, --verbose         verbose logging
   -p PROXY, --proxy PROXY
                         url to proxy web traffic through
+  -a, --aggressive      aggressive mode, e.g. running feroxbuster
   -sw SUBDOMAIN_WORDLIST, --subdomain-wordlist SUBDOMAIN_WORDLIST
                         wordlist to use for subdomain proxying
   -dw DIRECTORY_WORDLIST, --directory-wordlist DIRECTORY_WORDLIST
