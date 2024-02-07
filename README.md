@@ -32,3 +32,9 @@ options:
   -dw DIRECTORY_WORDLIST, --directory-wordlist DIRECTORY_WORDLIST
                         wordlist to use for directory brute forcing
 ```
+
+## TODO
+
+- [ ] Pass discovered subdomains to feroxbuster
+- [ ] Improve performance
+- [ ] Handle enum for other protocols, e.g. smb, smtp etc.
