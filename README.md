@@ -21,4 +21,10 @@ options:
                         just perform web checks on a provided port
   -s SSL, --ssl SSL     use ssl for web connections to the web-port
   -v, --verbose         verbose logging
+  -p PROXY, --proxy PROXY
+                        url to proxy web traffic through
+  -sw SUBDOMAIN_WORDLIST, --subdomain-wordlist SUBDOMAIN_WORDLIST
+                        wordlist to use for subdomain proxying
+  -dw DIRECTORY_WORDLIST, --directory-wordlist DIRECTORY_WORDLIST
+                        wordlist to use for directory brute forcing
 ```

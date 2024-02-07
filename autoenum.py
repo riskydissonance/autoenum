@@ -4,12 +4,12 @@ import re
 import subprocess
 import asyncio
 import sys
-import base64
 
 URL_REGEX = re.compile(r".*https?:\/\/([a-zA-Z0-9\.]+)")
 NMAP_OPEN_PORT_LINE_REGEX = re.compile(r"^\d+/tcp\s+open")
 FFUF_REGEX = re.compile(r".*\[2K(\S+)\s*\[Status: (\d+),")
 IP_REGEX = re.compile(r"\d+\.\d+\.\d+\.\d+")
+AUTOENUM_LOG_FILE = "/autoenum.log"
 
 
 class Logger:
@@ -22,28 +22,28 @@ class Logger:
     def highlight(message, output_dir):
         log = "\n[%s+%s] %s%s%s" % (Logger.GREEN, Logger.ENDC, Logger.GREEN, message, Logger.ENDC)
         print(log + "\n")
-        with open(output_dir + "/autoenum-log.txt", 'a') as f:
+        with open(output_dir + AUTOENUM_LOG_FILE, 'a') as f:
             f.write(log + "\n")
 
     @staticmethod
     def info(message, output_dir):
         log = "[%s*%s] %s" % (Logger.BLUE, Logger.ENDC, message)
         print(log)
-        with open(output_dir + "/autoenum-log.txt", 'a') as f:
+        with open(output_dir + AUTOENUM_LOG_FILE, 'a') as f:
             f.write(log + "\n")
 
     @staticmethod
     def success(message, output_dir):
         log = "[%s+%s] %s" % (Logger.GREEN, Logger.ENDC, message)
         print(log)
-        with open(output_dir + "/autoenum-log.txt", 'a') as f:
+        with open(output_dir + AUTOENUM_LOG_FILE, 'a') as f:
             f.write(log + "\n")
 
     @staticmethod
     def failure(message, output_dir):
         log = "[%s-%s] %s" % (Logger.RED, Logger.ENDC, message)
         print(log)
-        with open(output_dir + "/autoenum-log.txt", 'a') as f:
+        with open(output_dir + AUTOENUM_LOG_FILE, 'a') as f:
             f.write(log + "\n")
 
 
@@ -129,7 +129,7 @@ async def web_crawl(host, port, ssl, output_dir, proxy, verbose) -> []:
     Logger.info(f'Web crawling {url}', output_dir)
     cmd = f'katana -u {url} -o {output_dir}/katana-{host}-{port}.log'
     if proxy:
-        cmd += " -proxy http://127.0.0.1:8080"
+        cmd += f" -proxy {proxy}"
     output = run_command(cmd, output_dir, verbose)
     found = []
     for line in output.split("\n"):
@@ -156,13 +156,14 @@ async def subdomain_enum(host, port, ssl, output_dir, proxy, wordlist, verbose) 
     url = build_url(host, port, ssl)
     cmd = f'ffuf -u {url} -w {wordlist} -H "Host: FUZZ.{host}" -fc 302 -o {output_dir}/ffuf-subdomain-enum-{host}-{port}.log'
     if proxy:
-        cmd += " -x http://127.0.0.1:8080"
+        cmd += f" -x {proxy}"
     output = run_command(cmd, output_dir, verbose)
     for line in output.split('\n'):
         match = FFUF_REGEX.match(line.strip())
         if match:
             subdomain = match.group(1)
-            Logger.highlight(f"Found subdomain: {subdomain}.{host}", output_dir)
+            http_code = match.group(2)
+            Logger.highlight(f"Found subdomain: {subdomain}.{host} ({http_code})", output_dir)
             found.append(f"{subdomain}.{host}")
     return found
 
@@ -172,7 +173,7 @@ async def directory_brute_force(host, port, ssl, output_dir, proxy, wordlist, ve
     Logger.info(f'Directory brute forcing: {url}', output_dir)
     cmd = f'ffuf -u {url}/FUZZ -w {wordlist} -o {output_dir}/ffuf-dirb-{host}-{port}.log -fc 302'
     if proxy:
-        cmd += " -x http://127.0.0.1:8080"
+        cmd += f" -x {proxy}"
     output = run_command(cmd, output_dir, verbose)
     found = []
     for line in output.split('\n'):
@@ -218,6 +219,9 @@ async def main():
         sys.exit(1)
 
     Logger.info(f'Saving output to {output_dir}', output_dir)
+
+    if os.path.exists(f"{output_dir}{AUTOENUM_LOG_FILE}"):
+        os.remove(f"{output_dir}{AUTOENUM_LOG_FILE}")
 
     if args.web_port:
         await web_scan(args.ip, args.web_port, args.ssl, output_dir, args.proxy, args.subdomain_wordlist,
