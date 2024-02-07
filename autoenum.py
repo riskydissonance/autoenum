@@ -57,6 +57,7 @@ def create_arg_parser() -> argparse.ArgumentParser:
     parser.add_argument('-s', '--ssl', type=str, help='use ssl for web connections to the web-port')
     parser.add_argument('-v', '--verbose', help='verbose logging', action='store_true')
     parser.add_argument('-p', '--proxy', help='url to proxy web traffic through')
+    parser.add_argument('-r', '--redirects', help='don\'t ignore redirects', action='store_true')
     parser.add_argument('-a', '--aggressive', help='aggressive mode, e.g. running feroxbuster', action='store_true')
     parser.add_argument('-sw', '--subdomain-wordlist', help='wordlist to use for subdomain proxying',
                         default='/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt')
@@ -149,7 +150,7 @@ async def check_csp(host, port, ssl, output_dir, proxy, verbose) -> [str]:
 async def web_crawl(host, port, ssl, output_dir, proxy, verbose) -> [str]:
     url = build_url(host, port, ssl)
     Logger.info(f'[Crawler] Web crawling {url}', output_dir)
-    cmd = f'katana -u {url} -o {output_dir}/katana-{host}-{port}.log'
+    cmd = f'katana -u {url} -o {output_dir}/katana-{host}-{port}.log -jc -kf all -fx'
     if proxy:
         cmd += f" -proxy {proxy}"
     output = run_command(cmd, output_dir, verbose)
@@ -169,14 +170,16 @@ def build_url(host, port, ssl) -> str:
     return url
 
 
-async def subdomain_enum(host, port, ssl, output_dir, wordlist, verbose) -> [str]:
+async def subdomain_enum(host, port, ssl, output_dir, wordlist, show_redirects, verbose) -> [str]:
     found = []
     if IP_REGEX.match(host):
         Logger.info(f"[Subdomain Enum] Skipping subdomain enum for IP: {host}", output_dir)
         return found
     Logger.info(f'[Subdomain Enum] Starting enum: {host}:{port}', output_dir)
     url = build_url(host, port, ssl)
-    cmd = f'ffuf -u {url} -w {wordlist} -H "Host: FUZZ.{host}" -fc 302,301 -of md -o {output_dir}/ffuf-subdomain-enum-{host}-{port}.md'
+    cmd = f'ffuf -u {url} -w {wordlist} -H "Host: FUZZ.{host}" -of md -o {output_dir}/ffuf-subdomain-enum-{host}-{port}.md'
+    if not show_redirects:
+        cmd += ' -fc 302,301'
     output = run_command(cmd, output_dir, verbose)
     for line in output.split('\n'):
         match = FFUF_REGEX.match(line.strip())
@@ -190,10 +193,12 @@ async def subdomain_enum(host, port, ssl, output_dir, wordlist, verbose) -> [str
     return found
 
 
-async def url_brute_force(host, port, ssl, output_dir, proxy, wordlist, verbose) -> [str]:
+async def url_brute_force(host, port, ssl, output_dir, proxy, wordlist, show_redirects, verbose) -> [str]:
     url = build_url(host, port, ssl)
     Logger.info(f'[URL Brute Force] Brute forcing: {url}', output_dir)
-    cmd = f'ffuf -u {url}/FUZZ -w {wordlist} -of md -o {output_dir}/ffuf-dirb-{host}-{port}.md -fc 302,301'
+    cmd = f'ffuf -u {url}/FUZZ -w {wordlist} -of md -o {output_dir}/ffuf-dirb-{host}-{port}.md'
+    if not show_redirects:
+        cmd += ' -fc 302,301'
     if proxy:
         cmd += f" -x {proxy}"
     output = run_command(cmd, output_dir, verbose)
@@ -209,13 +214,13 @@ async def url_brute_force(host, port, ssl, output_dir, proxy, wordlist, verbose)
     return found
 
 
-async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, verbose):
+async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, show_redirects, verbose):
     if host.startswith("*"):
         Logger.failure("[Web] Wildcard domains are not supported and will have to be investigated manually", output_dir)
         return
     crawl = web_crawl(host, port, ssl, output_dir, proxy, verbose)
-    brute_force = url_brute_force(host, port, ssl, output_dir, proxy, directory_wordlist, verbose)
-    subdomains = await check_csp(host, port, ssl, output_dir, proxy, verbose)
+    brute_force = url_brute_force(host, port, ssl, output_dir, proxy, directory_wordlist, show_redirects, verbose)
+    subdomains = await check_csp(host, port, ssl, output_dir, proxy, show_redirects, verbose)
     subdomains.extend(await subdomain_enum(host, port, ssl, output_dir, subdomain_wordlist, verbose))
     tasks = []
     for subdomain in set(subdomains):
@@ -227,7 +232,7 @@ async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, direc
 async def aggressive_content_discovery(host, port, ssl, output_dir, proxy, verbose):
     url = build_url(host, port, ssl)
     Logger.info(f'[Aggressive] Starting scan of {url}', output_dir)
-    cmd = f"feroxbuster -u {url} --auto-tune -o {output_dir}/feroxbuster-{host}-{port}.log -a {USER_AGENT}"
+    cmd = f"feroxbuster -u {url} --auto-tune -o {output_dir}/feroxbuster-{host}-{port}.log -a '{USER_AGENT}'"
     if proxy:
         cmd += f" --proxy {proxy} --insecure"
     if verbose:
@@ -262,7 +267,7 @@ async def main():
 
     if args.web_port:
         await web_scan(args.ip, args.web_port, args.ssl, output_dir, args.proxy, args.subdomain_wordlist,
-                       args.directory_wordlist, args.verbose)
+                       args.directory_wordlist, args.redirects, args.verbose)
         return
 
     (host, open_ports, web_ports) = port_scan(args.ip, output_dir, args.verbose)
@@ -271,11 +276,11 @@ async def main():
     for (port, ssl) in web_ports:
         tasks.append(
             web_scan(args.ip, port, ssl, output_dir, args.proxy, args.subdomain_wordlist, args.directory_wordlist,
-                     args.verbose))
+                     args.redirects, args.verbose))
         if host != port:
             tasks.append(
                 web_scan(host, port, ssl, output_dir, args.proxy, args.subdomain_wordlist, args.directory_wordlist,
-                         args.verbose))
+                         args.redirects, args.verbose))
 
     await asyncio.gather(*tasks)
     Logger.highlight("Done!", output_dir)
