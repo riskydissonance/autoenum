@@ -214,7 +214,7 @@ async def url_brute_force(host, port, ssl, output_dir, proxy, wordlist, show_red
     return found
 
 
-async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, show_redirects, verbose):
+async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, show_redirects, verbose) -> [str]:
     if host.startswith("*"):
         Logger.failure("[Web] Wildcard domains are not supported and will have to be investigated manually", output_dir)
         return
@@ -223,12 +223,14 @@ async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, direc
     subdomains = await check_csp(host, port, ssl, output_dir, proxy, verbose)
     subdomains.extend(await subdomain_enum(host, port, ssl, output_dir, subdomain_wordlist, show_redirects, verbose))
     tasks = []
-    for subdomain in set(subdomains):
+    subdomains = set(subdomains)
+    for subdomain in subdomains:
         tasks.append(
             web_scan(subdomain, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, show_redirects,
                      verbose))
     await asyncio.gather(crawl, brute_force)
     await asyncio.gather(*tasks)
+    return subdomains
 
 
 async def aggressive_content_discovery(host, port, ssl, output_dir, proxy, verbose):
@@ -274,7 +276,8 @@ async def main():
 
     (host, open_ports, web_ports) = port_scan(args.ip, output_dir, args.verbose)
     tasks = []
-
+    # TODO capture discovered subdomains for feroxbuster
+    subdomains = []
     for (port, ssl) in web_ports:
         tasks.append(
             web_scan(args.ip, port, ssl, output_dir, args.proxy, args.subdomain_wordlist, args.directory_wordlist,
@@ -292,10 +295,10 @@ async def main():
         Logger.info('[Aggressive] Starting aggressive scans', output_dir)
         for (port, ssl) in web_ports:
             tasks.append(
-                aggressive_content_discovery(args.ip, port, ssl, output_dir, args.proxy, args.verbose))
-            if host != port:
+                aggressive_content_discovery(host, port, ssl, output_dir, args.proxy, args.verbose))
+            if host != args.ip:
                 tasks.append(
-                    aggressive_content_discovery(host, port, ssl, output_dir, args.proxy, args.verbose))
+                    aggressive_content_discovery(args.ip, port, ssl, output_dir, args.proxy, args.verbose))
 
         await asyncio.gather(*tasks)
         Logger.highlight("Aggressive scans done!", output_dir)
