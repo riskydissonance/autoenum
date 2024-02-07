@@ -1,10 +1,13 @@
 import argparse
 import os
+import re
 import subprocess
 import asyncio
 import sys
 
 WEB_PORTS = [80, 443]
+
+URL_REGEX = re.compile(r".*https?:\/\/([a-zA-Z0-9\.]+)")
 
 
 class Logger:
@@ -38,7 +41,7 @@ def create_arg_parser():
 
 def port_scan(ip, output_dir, verbose) -> (str, []):
     Logger.info(f'All TCP port scan of {ip}')
-    cmd = f'sudo nmap -v -sS -Pn -n -p- -n --min-rate=10000 -oA {output_dir}/nmap-tcp-quick-{ip} {ip}'
+    cmd = f'nmap -v -sS -Pn -n -p- -n --min-rate=10000 -oA {output_dir}/nmap-tcp-quick-{ip} {ip}'
     if verbose:
         Logger.info(f'Running: {cmd}')
     quick_scan_output = (subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
@@ -50,16 +53,43 @@ def port_scan(ip, output_dir, verbose) -> (str, []):
         if "/tcp open" in line:
             open_ports.append(line.split('/')[0])
     Logger.info(f'Open ports on {ip}: {",".join(open_ports)}')
-    host = "localhost"
-    Logger.info(f'Focused TCP port scan of {ip}, ports: {",".join(open_ports)}')
-    cmd = f'sudo nmap -v -sCV -Pn -n -p {",".join(open_ports)} -n -oA {output_dir}/nmap-tcp-full-{ip} {ip}'
+    full_scan_output = full_port_scan(ip, open_ports, output_dir, verbose)
+    host = ip
+    for line in full_scan_output.split('\n'):
+        if "Did not follow redirect to " in line:
+            host = URL_REGEX.match(line).group(1)
+            Logger.info(f'Got redirect to {host}')
+            with open('/etc/hosts', 'r') as f:
+                contents = f.read()
+                if host not in contents:
+                    Logger.info("Host not in /etc/hosts file, adding now")
+                    cmd = f"echo '{ip} {host}' >> /etc/hosts"
+                    if verbose:
+                        Logger.info(f'Running: {cmd}')
+                    hosts_file_edit_output = (
+                        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True).stdout.decode(
+                            'utf-8'))
+                    if verbose:
+                        print(hosts_file_edit_output)
+                else:
+                    Logger.info("Host already in /etc/hosts file")
+
+            Logger.info(f'Rerunning scripting nmap scan on new host')
+            full_port_scan(host, open_ports, output_dir, verbose)
+
+    return host, open_ports
+
+
+def full_port_scan(host, open_ports, output_dir, verbose):
+    Logger.info(f'Focused TCP port scan of {host}, ports: {",".join(open_ports)}')
+    cmd = f'nmap -v -sCV -Pn -n -p {",".join(open_ports)} -n -oA {output_dir}/nmap-tcp-full-{host} {host}'
     if verbose:
         Logger.info(f'Running: {cmd}')
     full_scan_output = (
         subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True).stdout.decode('utf-8'))
     if verbose:
         print(full_scan_output)
-    return host, open_ports
+    return full_scan_output
 
 
 async def web_crawl(host, port, output_dir, verbose) -> []:
@@ -92,8 +122,12 @@ async def main():
     parser = create_arg_parser()
     args = parser.parse_args()
 
+    if not os.geteuid() == 0:
+        Logger.failure('This script must be run as root')
+        sys.exit(1)
+
     if not args.ip:
-        Logger.failure(f'--ip is required')
+        Logger.failure('--ip is required')
         sys.exit(1)
 
     output_dir = args.output_dir
