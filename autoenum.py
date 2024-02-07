@@ -4,10 +4,12 @@ import re
 import subprocess
 import asyncio
 import sys
-
-WEB_PORTS = ["80", "443"]
+import base64
 
 URL_REGEX = re.compile(r".*https?:\/\/([a-zA-Z0-9\.]+)")
+NMAP_OPEN_PORT_LINE_REGEX = re.compile(r"^\d+/tcp\s+open")
+FFUF_REGEX = re.compile(r".*\[2K(\S+)\s*\[Status: (\d+),")
+IP_REGEX = re.compile(r"\d+\.\d+\.\d+\.\d+")
 
 
 class Logger:
@@ -17,16 +19,32 @@ class Logger:
     ENDC = '\033[0m'
 
     @staticmethod
-    def info(message):
-        print("[%s*%s] %s" % (Logger.BLUE, Logger.ENDC, message))
+    def highlight(message, output_dir):
+        log = "\n[%s+%s] %s%s%s" % (Logger.GREEN, Logger.ENDC, Logger.GREEN, message, Logger.ENDC)
+        print(log + "\n")
+        with open(output_dir + "/autoenum-log.txt", 'a') as f:
+            f.write(log + "\n")
 
     @staticmethod
-    def success(message):
-        print("[%s+%s] %s" % (Logger.GREEN, Logger.ENDC, message))
+    def info(message, output_dir):
+        log = "[%s*%s] %s" % (Logger.BLUE, Logger.ENDC, message)
+        print(log)
+        with open(output_dir + "/autoenum-log.txt", 'a') as f:
+            f.write(log + "\n")
 
     @staticmethod
-    def failure(message):
-        print("[%s-%s] %s" % (Logger.RED, Logger.ENDC, message))
+    def success(message, output_dir):
+        log = "[%s+%s] %s" % (Logger.GREEN, Logger.ENDC, message)
+        print(log)
+        with open(output_dir + "/autoenum-log.txt", 'a') as f:
+            f.write(log + "\n")
+
+    @staticmethod
+    def failure(message, output_dir):
+        log = "[%s-%s] %s" % (Logger.RED, Logger.ENDC, message)
+        print(log)
+        with open(output_dir + "/autoenum-log.txt", 'a') as f:
+            f.write(log + "\n")
 
 
 def create_arg_parser():
@@ -36,120 +54,185 @@ def create_arg_parser():
     parser.add_argument('-w', '--web-port', type=str, help='just perform web checks on a provided port')
     parser.add_argument('-s', '--ssl', type=str, help='use ssl for web connections to the web-port')
     parser.add_argument('-v', '--verbose', help='verbose logging', action='store_true')
+    parser.add_argument('-p', '--proxy', help='url to proxy web traffic through')
+    parser.add_argument('-sw', '--subdomain-wordlist', help='wordlist to use for subdomain proxying',
+                        default='/usr/share/seclists/Discovery/DNS/subdomains-top1million-5000.txt')
+    parser.add_argument('-dw', '--directory-wordlist', help='wordlist to use for directory brute forcing',
+                        default='/usr/share/seclists/Discovery/Web-Content/common.txt')
     return parser
 
 
 def port_scan(ip, output_dir, verbose) -> (str, []):
-    Logger.info(f'All TCP port scan of {ip}')
-    cmd = f'nmap -v -sS -Pn -n -p- -n --min-rate=10000 -oA {output_dir}/nmap-tcp-quick-{ip} {ip}'
-    if verbose:
-        Logger.info(f'Running: {cmd}')
-    quick_scan_output = (subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
-                         .stdout.decode('utf-8'))
-    if verbose:
-        print(quick_scan_output)
-    open_ports = []
-    for line in quick_scan_output.split('\n'):
-        if "/tcp open" in line:
-            open_ports.append(line.split('/')[0])
-    Logger.info(f'Open ports on {ip}: {",".join(open_ports)}')
+    Logger.info(f'All TCP port scan of {ip}', output_dir)
+    open_ports = quick_scan(ip, output_dir, verbose)
+    if not open_ports:
+        Logger.failure(f"No open ports found on {ip}", output_dir)
+        sys.exit(1)
+    Logger.highlight(f'Open ports on {ip}: {",".join(open_ports)}', output_dir)
     full_scan_output = full_port_scan(ip, open_ports, output_dir, verbose)
     host = ip
+    web_ports = []
     for line in full_scan_output.split('\n'):
         if "Did not follow redirect to " in line:
             host = URL_REGEX.match(line).group(1)
-            Logger.info(f'Got redirect to {host}')
+            Logger.info(f'Got redirect to {host}', output_dir)
             with open('/etc/hosts', 'r') as f:
                 contents = f.read()
                 if host not in contents:
-                    Logger.info("Host not in /etc/hosts file, adding now")
+                    Logger.info("Host not in /etc/hosts file, adding now", output_dir)
                     cmd = f"echo '{ip} {host}' >> /etc/hosts"
-                    if verbose:
-                        Logger.info(f'Running: {cmd}')
-                    hosts_file_edit_output = (
-                        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True).stdout.decode(
-                            'utf-8'))
-                    if verbose:
-                        print(hosts_file_edit_output)
+                    run_command(cmd, output_dir, verbose)
                 else:
-                    Logger.info("Host already in /etc/hosts file")
+                    Logger.info("Host already in /etc/hosts file", output_dir)
 
-            Logger.info(f'Rerunning scripting nmap scan on new host')
+            Logger.info(f'Rerunning scripting nmap scan on new host', output_dir)
             full_port_scan(host, open_ports, output_dir, verbose)
+        if NMAP_OPEN_PORT_LINE_REGEX.match(line):
+            Logger.success(line.strip(), output_dir)
+            if "ssl/https" in line:
+                web_ports.append((line.split("/")[0], True))
+            elif "http" in line:
+                web_ports.append((line.split("/")[0], False))
 
-    return host, open_ports
+    return host, open_ports, web_ports
+
+
+def quick_scan(ip, output_dir, verbose):
+    cmd = f'nmap -v -sS -Pn -n -p- -n --min-rate=10000 -oA {output_dir}/nmap-tcp-quick-{ip} {ip}'
+    output = run_command(cmd, output_dir, verbose)
+    open_ports = []
+    for line in output.split('\n'):
+        if NMAP_OPEN_PORT_LINE_REGEX.match(line):
+            open_ports.append(line.split('/')[0])
+    return open_ports
+
+
+def run_command(cmd, output_dir, verbose):
+    if verbose:
+        Logger.info(f'Running: {cmd}', output_dir)
+    output = (subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True)
+              .stdout.decode('utf-8'))
+    if verbose:
+        print(output)
+    return output
 
 
 def full_port_scan(host, open_ports, output_dir, verbose):
-    Logger.info(f'Focused TCP port scan of {host}, ports: {",".join(open_ports)}')
+    Logger.info(f'Focused TCP port scan of {host}, ports: {",".join(open_ports)}', output_dir)
     cmd = f'nmap -v -sCV -Pn -n -p {",".join(open_ports)} -n -oA {output_dir}/nmap-tcp-full-{host} {host}'
-    if verbose:
-        Logger.info(f'Running: {cmd}')
-    full_scan_output = (
-        subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, shell=True).stdout.decode('utf-8'))
-    if verbose:
-        print(full_scan_output)
-    return full_scan_output
+    output = run_command(cmd, output_dir, verbose)
+    return output
 
 
-async def web_crawl(host, port, output_dir, verbose) -> []:
-    Logger.info(f'Web crawling {host}:{port}')
-    # Katana
-    pass
+async def web_crawl(host, port, ssl, output_dir, proxy, verbose) -> []:
+    url = build_url(host, port, ssl)
+    Logger.info(f'Web crawling {url}', output_dir)
+    cmd = f'katana -u {url} -o {output_dir}/katana-{host}-{port}.log'
+    if proxy:
+        cmd += " -proxy http://127.0.0.1:8080"
+    output = run_command(cmd, output_dir, verbose)
+    found = []
+    for line in output.split("\n"):
+        if line.startswith("http"):
+            Logger.success(f"Crawled: {line.strip()}", output_dir)
+            found.append(line.strip())
+    return found
 
 
-async def subdomain_enum(host, port, output_dir, verbose):
-    Logger.info(f'Subdomain enum: {host}:{port}')
-    # ffuf subdomain enum
-    pass
+def build_url(host, port, ssl):
+    if ssl:
+        url = f'https://{host}:{port}'
+    else:
+        url = f'http://{host}:{port}'
+    return url
 
 
-async def directory_brute_force(host, port, output_dir, verbose):
-    Logger.info(f'Directory brute forcing: {host}:{port}')
-    # ffuf subdomain brute force
-    pass
+async def subdomain_enum(host, port, ssl, output_dir, proxy, wordlist, verbose) -> []:
+    found = []
+    if IP_REGEX.match(host):
+        Logger.info(f"Skipping subdomain enum for IP: {host}", output_dir)
+        return found
+    Logger.info(f'Subdomain enum: {host}:{port}', output_dir)
+    url = build_url(host, port, ssl)
+    cmd = f'ffuf -u {url} -w {wordlist} -H "Host: FUZZ.{host}" -fc 302 -o {output_dir}/ffuf-subdomain-enum-{host}-{port}.log'
+    if proxy:
+        cmd += " -x http://127.0.0.1:8080"
+    output = run_command(cmd, output_dir, verbose)
+    for line in output.split('\n'):
+        match = FFUF_REGEX.match(line.strip())
+        if match:
+            subdomain = match.group(1)
+            Logger.highlight(f"Found subdomain: {subdomain}.{host}", output_dir)
+            found.append(f"{subdomain}.{host}")
+    return found
 
 
-async def web_scan(host, output_dir, port, verbose):
-    Logger.info(f'Web scanning {host}:{port}')
-    crawl = web_crawl(host, port, output_dir, verbose)
-    brute_force = directory_brute_force(host, port, output_dir, verbose)
-    subdomains = subdomain_enum(host, port, output_dir, verbose)
-    await asyncio.gather(crawl, brute_force, subdomains)
+async def directory_brute_force(host, port, ssl, output_dir, proxy, wordlist, verbose) -> []:
+    url = build_url(host, port, ssl)
+    Logger.info(f'Directory brute forcing: {url}', output_dir)
+    cmd = f'ffuf -u {url}/FUZZ -w {wordlist} -o {output_dir}/ffuf-dirb-{host}-{port}.log -fc 302'
+    if proxy:
+        cmd += " -x http://127.0.0.1:8080"
+    output = run_command(cmd, output_dir, verbose)
+    found = []
+    for line in output.split('\n'):
+        match = FFUF_REGEX.match(line)
+        if match:
+            directory = match.group(1)
+            http_code = match.group(2)
+            Logger.success(f"Directory brute-forced: {url}/{directory} ({http_code})", output_dir)
+            found.append(directory)
+    return found
+
+
+async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, verbose):
+    Logger.info(f'Web scanning {host}:{port}', output_dir)
+    crawl = web_crawl(host, port, ssl, output_dir, proxy, verbose)
+    brute_force = directory_brute_force(host, port, ssl, output_dir, proxy, directory_wordlist, verbose)
+    subdomains = await subdomain_enum(host, port, ssl, output_dir, proxy, subdomain_wordlist, verbose)
+    tasks = []
+    for subdomain in subdomains:
+        tasks.append(web_scan(subdomain, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, verbose))
+    await asyncio.gather(crawl, brute_force)
+    await asyncio.gather(*tasks)
 
 
 async def main():
     parser = create_arg_parser()
     args = parser.parse_args()
 
-    if not os.geteuid() == 0:
-        Logger.failure('This script must be run as root')
-        sys.exit(1)
-
-    if not args.ip:
-        Logger.failure('--ip is required')
-        sys.exit(1)
-
     output_dir = args.output_dir
-
     if not args.output_dir:
         output_dir = os.getcwd()
 
-    if args.ssl and not args.web_port:
-        Logger.failure(f'Cannot use --ssl without --web-port')
+    if not os.geteuid() == 0:
+        Logger.failure('This script must be run as root', output_dir)
         sys.exit(1)
 
-    Logger.info(f'Saving output to {output_dir}')
+    if not args.ip:
+        Logger.failure('--ip is required', output_dir)
+        sys.exit(1)
+
+    if args.ssl and not args.web_port:
+        Logger.failure(f'Cannot use --ssl without --web-port', output_dir)
+        sys.exit(1)
+
+    Logger.info(f'Saving output to {output_dir}', output_dir)
 
     if args.web_port:
-        await web_scan(args.ip, output_dir, args.web_port, args.verbose)
+        await web_scan(args.ip, args.web_port, args.ssl, output_dir, args.proxy, args.subdomain_wordlist,
+                       args.directory_wordlist, args.verbose)
         return
 
-    (host, open_ports) = port_scan(args.ip, output_dir, args.verbose)
+    (host, open_ports, web_ports) = port_scan(args.ip, output_dir, args.verbose)
     tasks = []
-    for port in WEB_PORTS:
-        if port in open_ports:
-            tasks.append(web_scan(host, output_dir, port, args.verbose))
+
+    for (port, ssl) in web_ports:
+        tasks.append(
+            web_scan(args.ip, port, ssl, output_dir, args.proxy, args.subdomain_wordlist, args.directory_wordlist,
+                     args.verbose))
+        tasks.append(web_scan(host, port, ssl, output_dir, args.proxy, args.subdomain_wordlist, args.directory_wordlist,
+                              args.verbose))
 
     await asyncio.gather(*tasks)
 
