@@ -176,7 +176,7 @@ async def subdomain_enum(host, port, ssl, output_dir, wordlist, verbose) -> [str
         return found
     Logger.info(f'[Subdomain Enum] Starting enum: {host}:{port}', output_dir)
     url = build_url(host, port, ssl)
-    cmd = f'ffuf -u {url} -w {wordlist} -H "Host: FUZZ.{host}" -fc 302 -of md -o {output_dir}/ffuf-subdomain-enum-{host}-{port}.md'
+    cmd = f'ffuf -u {url} -w {wordlist} -H "Host: FUZZ.{host}" -fc 302,301 -of md -o {output_dir}/ffuf-subdomain-enum-{host}-{port}.md'
     output = run_command(cmd, output_dir, verbose)
     for line in output.split('\n'):
         match = FFUF_REGEX.match(line.strip())
@@ -193,7 +193,7 @@ async def subdomain_enum(host, port, ssl, output_dir, wordlist, verbose) -> [str
 async def url_brute_force(host, port, ssl, output_dir, proxy, wordlist, verbose) -> [str]:
     url = build_url(host, port, ssl)
     Logger.info(f'[URL Brute Force] Brute forcing: {url}', output_dir)
-    cmd = f'ffuf -u {url}/FUZZ -w {wordlist} -of md -o {output_dir}/ffuf-dirb-{host}-{port}.md -fc 302'
+    cmd = f'ffuf -u {url}/FUZZ -w {wordlist} -of md -o {output_dir}/ffuf-dirb-{host}-{port}.md -fc 302,301'
     if proxy:
         cmd += f" -x {proxy}"
     output = run_command(cmd, output_dir, verbose)
@@ -290,8 +290,8 @@ async def main():
                 tasks.append(
                     aggressive_content_discovery(host, port, ssl, output_dir, args.proxy, args.verbose))
 
-    await asyncio.gather(*tasks)
-    Logger.highlight("Aggressive scans done!", output_dir)
+        await asyncio.gather(*tasks)
+        Logger.highlight("Aggressive scans done!", output_dir)
 
 
 if __name__ == '__main__':
