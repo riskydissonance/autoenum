@@ -1,5 +1,3 @@
-#!/usr/bin/env python3
-
 import argparse
 import os
 import re
@@ -93,18 +91,21 @@ def port_scan(ip, output_dir, verbose) -> (str, []):
     if redirect_line is not None:
         host = URL_REGEX.match(redirect_line).group(1)
         Logger.info(f'[Portscan] Got redirect to {host}', output_dir)
-        with open('/etc/hosts', 'r') as f:
-            contents = f.read()
-            if host not in contents:
-                Logger.info("[Portscan] Host not in /etc/hosts file, adding now", output_dir)
-                cmd = f"echo '{ip} {host}' >> /etc/hosts"
-                run_command(cmd, output_dir, verbose)
-            else:
-                Logger.info("[Portscan] Host already in /etc/hosts file", output_dir)
-
+        add_to_etc_hosts(ip, host, output_dir, verbose)
         Logger.info(f'[Portscan] Rerunning scripting nmap scan on new host', output_dir)
         full_port_scan(host, open_ports, output_dir, verbose)
     return host, open_ports, web_ports
+
+
+def add_to_etc_hosts(ip, host, output_dir, verbose):
+    with open('/etc/hosts', 'r') as f:
+        contents = f.read()
+        if host not in contents:
+            Logger.info("[Portscan] Host not in /etc/hosts file, adding now", output_dir)
+            cmd = f"echo '{ip} {host}' >> /etc/hosts"
+            run_command(cmd, output_dir, verbose)
+        else:
+            Logger.info("[Portscan] Host already in /etc/hosts file", output_dir)
 
 
 def quick_scan(ip, output_dir, verbose) -> [str]:
@@ -172,7 +173,7 @@ def build_url(host, port, ssl) -> str:
     return url
 
 
-async def subdomain_enum(host, port, ssl, output_dir, wordlist, show_redirects, verbose) -> [str]:
+async def subdomain_enum(ip, host, port, ssl, output_dir, wordlist, show_redirects, verbose) -> [str]:
     found = []
     if IP_REGEX.match(host):
         Logger.info(f"[Subdomain Enum] Skipping subdomain enum for IP: {host}", output_dir)
@@ -192,6 +193,7 @@ async def subdomain_enum(host, port, ssl, output_dir, wordlist, show_redirects, 
             Logger.highlight(f"[Subdomain Enum] Found: {subdomain}.{host} (Code: {http_code}, Size: {size})",
                              output_dir)
             found.append(f"{subdomain}.{host}")
+            add_to_etc_hosts(ip, f"{subdomain}.{host}", output_dir, verbose)
     return found
 
 
@@ -216,19 +218,19 @@ async def url_brute_force(host, port, ssl, output_dir, proxy, wordlist, show_red
     return found
 
 
-async def web_scan(host, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, show_redirects, verbose) -> [str]:
+async def web_scan(ip, host, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, show_redirects, verbose) -> [str]:
     if host.startswith("*"):
         Logger.failure("[Web] Wildcard domains are not supported and will have to be investigated manually", output_dir)
         return
     crawl = web_crawl(host, port, ssl, output_dir, proxy, verbose)
     brute_force = url_brute_force(host, port, ssl, output_dir, proxy, directory_wordlist, show_redirects, verbose)
     subdomains = await check_csp(host, port, ssl, output_dir, proxy, verbose)
-    subdomains.extend(await subdomain_enum(host, port, ssl, output_dir, subdomain_wordlist, show_redirects, verbose))
+    subdomains.extend(await subdomain_enum(ip, host, port, ssl, output_dir, subdomain_wordlist, show_redirects, verbose))
     tasks = []
     subdomains = set(subdomains)
     for subdomain in subdomains:
         tasks.append(
-            web_scan(subdomain, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, show_redirects,
+            web_scan(ip, subdomain, port, ssl, output_dir, proxy, subdomain_wordlist, directory_wordlist, show_redirects,
                      verbose))
     await asyncio.gather(crawl, brute_force)
     await asyncio.gather(*tasks)
@@ -272,7 +274,7 @@ async def main():
         os.remove(f"{output_dir}{AUTOENUM_LOG_FILE}")
 
     if args.web_port:
-        await web_scan(args.ip, args.web_port, args.ssl, output_dir, args.proxy, args.subdomain_wordlist,
+        await web_scan(args.ip, args.ip, args.web_port, args.ssl, output_dir, args.proxy, args.subdomain_wordlist,
                        args.directory_wordlist, args.redirects, args.verbose)
         return
 
@@ -282,11 +284,11 @@ async def main():
     subdomains = []
     for (port, ssl) in web_ports:
         tasks.append(
-            web_scan(args.ip, port, ssl, output_dir, args.proxy, args.subdomain_wordlist, args.directory_wordlist,
+            web_scan(args.ip, args.ip, port, ssl, output_dir, args.proxy, args.subdomain_wordlist, args.directory_wordlist,
                      args.redirects, args.verbose))
         if host != port:
             tasks.append(
-                web_scan(host, port, ssl, output_dir, args.proxy, args.subdomain_wordlist, args.directory_wordlist,
+                web_scan(args.ip, host, port, ssl, output_dir, args.proxy, args.subdomain_wordlist, args.directory_wordlist,
                          args.redirects, args.verbose))
 
     await asyncio.gather(*tasks)
